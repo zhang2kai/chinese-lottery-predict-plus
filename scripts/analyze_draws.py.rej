@@ -1,0 +1,9 @@
+@@ -175,2 +175,7 @@
+     draws.sort(key=lambda item: (item["date"], item["issue"]), reverse=True)
+-    return {"lottery": lottery, "sources": sources, "draws": draws}
++    return {
++        "lottery": lottery,
++        "sources": sources,
++        "verification": verification,
++        "draws": draws,
++    }
