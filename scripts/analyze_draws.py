@@ -7,6 +7,7 @@ import argparse
 from collections import Counter
 from datetime import date, datetime
 import json
+from math import comb, isfinite, sqrt
 from pathlib import Path
 import random
 import sys
@@ -228,12 +229,102 @@ def _frequency_summary(counts: Mapping[int, int], limit: int = 5) -> dict[str, A
     }
 
 
+def mathematical_models(
+    lottery: str,
+    area_counts: Mapping[str, Mapping[int, int]],
+    window: int,
+    ticket_count: int,
+    payouts: Any = None,
+) -> dict[str, Any]:
+    """Fair, independent draws; payouts are an explicit pre-tax scenario."""
+    rules = RULES[lottery]
+    total = 1
+    ways = {}
+    frequency_baseline = {}
+    for area, rule in rules.items():
+        n, k = rule["maximum"], rule["count"]
+        total *= comb(n, k)
+        ways[area] = [comb(k, hits) * comb(n - k, k - hits) for hits in range(k + 1)]
+        p = k / n
+        frequency_baseline[area] = {
+            "per_draw_probability": p,
+            "expected_count": window * p,
+            "count_standard_deviation": sqrt(window * p * (1 - p)),
+            "frequency_standard_error": sqrt(p * (1 - p) / window),
+            "observed_rates": {
+                f"{number:02d}": value / window
+                for number, value in area_counts[area].items()
+            },
+        }
+
+    outcomes = [
+        {
+            "matches": f"{primary}+{secondary}",
+            "favorable_outcomes": primary_ways * secondary_ways,
+            "probability": primary_ways * secondary_ways / total,
+        }
+        for primary, primary_ways in enumerate(ways["primary"])
+        for secondary, secondary_ways in enumerate(ways["secondary"])
+    ]
+    ev = {
+        "status": "unavailable",
+        "ticket_cost_yuan": 2,
+        "formula": "EV = sum(P(matches) * E[payout_yuan | matches]) - 2",
+        "gross_expected_payout_yuan": None,
+        "net_ev_yuan": None,
+        "reason": "缺少完整的各命中类别条件期望奖金，不能计算数值 EV。",
+    }
+    if payouts is not None:
+        if not isinstance(payouts, dict) or payouts.get("lottery") != lottery:
+            raise DataValidationError("payouts.lottery 必须与开奖数据一致")
+        note = _require_non_empty_string(payouts.get("note"), "payouts.note")
+        amounts = payouts.get("amounts")
+        if not isinstance(amounts, dict) or set(amounts) != {row["matches"] for row in outcomes}:
+            raise DataValidationError("payouts.amounts 必须完整覆盖所有命中类别，未中奖类别也须显式填 0")
+        for amount in amounts.values():
+            if (
+                isinstance(amount, bool)
+                or not isinstance(amount, (int, float))
+                or amount < 0
+                or amount > sys.float_info.max
+                or not isfinite(amount)
+            ):
+                raise DataValidationError("奖金必须是有限的非负数，单位为元")
+        gross = sum(row["probability"] * amounts[row["matches"]] for row in outcomes)
+        ev.update({
+            "status": "scenario",
+            "reason": None,
+            "note": note,
+            "basis": "税前情景值；不代表实际收益预测",
+            "amounts": amounts,
+            "gross_expected_payout_yuan": gross,
+            "net_ev_yuan": gross - 2,
+        })
+
+    return {
+        "assumption": "每期公平、独立开奖，各区均匀且独立抽取，号码规则在窗口内不变。",
+        "combinatorics": {
+            "total_combinations": total,
+            "single_ticket_jackpot_probability": 1 / total,
+            "distinct_tickets_same_draw": ticket_count,
+            "distinct_tickets_jackpot_probability": ticket_count / total,
+            "match_distribution": outcomes,
+        },
+        "law_of_large_numbers": {
+            "areas": frequency_baseline,
+            "interpretation": "长期相对频次趋近理论概率，不保证短期补偿；各号码计数并非相互独立。",
+        },
+        "expected_value": ev,
+    }
+
+
 def analyze_dataset(
     data: Any,
     *,
     window: int = 100,
     count: int = 5,
     seed: int | None = None,
+    payouts: Any = None,
 ) -> dict[str, Any]:
     if window <= 0:
         raise DataValidationError("window 必须大于 0")
@@ -249,6 +340,10 @@ def analyze_dataset(
     rules = RULES[dataset["lottery"]]
     primary_counts = _frequency(selected, "primary", rules["primary"]["maximum"])
     secondary_counts = _frequency(selected, "secondary", rules["secondary"]["maximum"])
+    models = mathematical_models(
+        dataset["lottery"], {"primary": primary_counts, "secondary": secondary_counts},
+        window, count, payouts,
+    )
 
     rng = random.Random(seed) if seed is not None else random.SystemRandom()
     primary_population = list(primary_counts)
@@ -307,6 +402,7 @@ def analyze_dataset(
             "secondary": _frequency_summary(secondary_counts),
         },
         "recommendations": recommendations,
+        "mathematical_models": models,
         "seed": seed,
         "disclaimer": DISCLAIMER,
     }
@@ -320,6 +416,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--window", type=int, default=100, help="统计期数，默认 100")
     parser.add_argument("--count", type=int, default=5, help="生成注数，范围 1–20，默认 5")
     parser.add_argument("--seed", type=int, help="可选随机种子，用于复现结果")
+    parser.add_argument("--payouts", type=Path, help="可选的完整税前奖金情景 JSON，格式见 references/mathematical-models.md")
     return parser.parse_args(argv)
 
 
@@ -327,7 +424,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
         data = json.loads(args.input.read_text(encoding="utf-8"))
-        result = analyze_dataset(data, window=args.window, count=args.count, seed=args.seed)
+        payouts = json.loads(args.payouts.read_text(encoding="utf-8")) if args.payouts else None
+        result = analyze_dataset(data, window=args.window, count=args.count, seed=args.seed, payouts=payouts)
     except (OSError, json.JSONDecodeError, DataValidationError, RuntimeError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2
@@ -338,4 +436,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
