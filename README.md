@@ -11,6 +11,7 @@
 - 默认披露最近 `100` 期的统计窗口和数据截止点。
 - 使用标准库 Python 脚本统计和生成，避免依赖 Agent 手工计数。
 - 支持随机种子，便于复现和测试。
+- 内置组合概率、大数定律频次基线和可选奖金情景 EV，详见 [数学模型](references/mathematical-models.md)。
 - 单次最多展示 `20` 注，不主动建议增加预算。
 
 ## 仓库结构
@@ -21,6 +22,7 @@
 ├── references/
 │   ├── lottery-rules.md
 │   ├── data-sources.md
+│   ├── mathematical-models.md
 │   └── output-format.md
 ├── scripts/
 │   └── analyze_draws.py
@@ -48,7 +50,7 @@ python3 scripts/analyze_draws.py draws.json --window 100 --count 5
 python3 scripts/analyze_draws.py draws.json --window 100 --count 5 --seed 20260911
 ```
 
-脚本只负责校验输入、统计历史频次和生成合法组合，不负责联网抓取。Agent 必须先从真实来源取得数据，并保留来源名称、URL 和带时区的检索时间。
+脚本负责校验输入、统计历史频次、计算数学模型和生成合法组合，不负责联网抓取。Agent 必须先从真实来源取得数据，并保留来源名称、URL 和带时区的检索时间。EV 默认不输出数值；可通过 `--payouts` 提供完整税前奖金情景，输入格式见数学模型说明。
 
 ## 测试
 
@@ -59,4 +61,3 @@ python3 -m unittest discover -s tests -v
 ## 风险提示
 
 彩票开奖是随机事件。历史频次不能预测未来结果；每个合法号码组合在公平开奖中的理论机会相同。所有生成结果仅供娱乐，请只使用可承受损失的娱乐预算。
-
